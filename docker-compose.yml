@@ -1,0 +1,41 @@
+version: '3.7'
+
+services:
+
+  api:
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+      args:
+        app_name: ${COMPOSE_PROJECT_NAME}
+    command: uvicorn app.main:api --reload --workers 1 --host 0.0.0.0 --port 8000
+    volumes:
+      - ./src:/usr/src
+    ports:
+      - 8000:8000
+    environment:
+      - ENVIRONMENT=dev
+      - TESTING=0
+      - DATABASE_URL=postgres://${DBUSER}:${DBPASS}@postgres:5432/${COMPOSE_PROJECT_NAME}_dev
+      - DATABASE_TEST_URL=postgres://${DBUSER}:${DBPASS}@postgres:5432/${COMPOSE_PROJECT_NAME}_tst
+      - WAITFOR=postgres:5432,redis:6379
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    build:
+      context: ./src/postgres
+      dockerfile: Dockerfile
+      args:
+        db_base_name: ${COMPOSE_PROJECT_NAME}
+    expose:
+      - 5432
+    environment:
+      - POSTGRES_USER=${DBUSER}
+      - POSTGRES_PASSWORD=${DBPASS}
+
+  redis:
+    image: redis
+    expose:
+      - 6379

@@ -1,0 +1,86 @@
+###########
+# BUILDER #
+###########
+
+# pull official base image
+FROM python:3.8.3-slim-buster as builder
+
+# install system dependencies
+RUN apt-get update \
+  && apt-get -y install gcc \
+  && apt-get clean
+
+# set work directory
+WORKDIR /usr/src
+
+# set environment varibles
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# install dependencies
+RUN pip install --upgrade pip
+COPY ./requirements.txt .
+RUN pip wheel \
+    --no-cache-dir \
+    --no-deps \
+    --wheel-dir /usr/src/wheels \
+    -r requirements.txt
+
+# "install" app
+COPY . /usr/src/
+
+##########
+# TESTER #
+##########
+
+FROM builder as tester
+
+# Run Tests
+COPY ./requirements-test.txt .
+RUN pip install -r requirements-test.txt
+RUN flake8 . --exclude ./env/*
+RUN black --exclude=migrations --exclude=env --diff .
+RUN isort ./**/*.py --diff
+
+###########
+#  FINAL  #
+###########
+
+# pull official base image
+FROM python:3.8.3-slim-buster
+
+# some variables
+ENV HOME=/home/lyngon
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+ENV ENVIRONMENT prod
+ENV TESTING 0
+
+# create directories and the app user
+RUN mkdir -p $HOME \
+ && addgroup --system app \
+ && adduser --system --group app
+
+# set directory
+WORKDIR $HOME
+
+# install system dependencies
+RUN apt-get update \
+ && apt-get -y install \
+ && apt-get clean
+
+# install python dependencies
+COPY --from=builder /usr/src/wheels /wheels
+COPY --from=builder /usr/src/requirements.txt .
+RUN pip install --upgrade pip
+RUN pip install --no-cache /wheels/*
+
+# add app
+COPY . .
+# make the app user the owner
+RUN chown -R app:app $HOME
+# change to the app user
+USER app
+
+# run gunicorn
+CMD gunicorn --bind 0.0.0.0:$PORT app.main:api -k uvicorn.workers.UvicornWorker

@@ -1,0 +1,128 @@
+name: Continuous Integration and Delivery
+
+on:
+  push:
+    branches:
+      - master
+
+env:
+  IMAGE: docker.pkg.github.com/$GITHUB_REPOSITORY/app
+  PORT: 8088
+
+jobs:
+
+  build:
+    name: Build Docker Image
+    runs-on: self-hosted
+    # runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v1
+      - name: Log in to GitHub Packages
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin docker.pkg.github.com
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build images
+        run: |
+          docker build \
+            --force-rm \
+            --tag ${{ env.IMAGE }}:latest \
+            --file ./src/Dockerfile.prod \
+            "./src"
+      - name: Push images
+        run: |
+          docker push ${{ env.IMAGE }}:latest
+
+  test:
+    name: Test Docker Image
+    runs-on: self-hosted
+    # runs-on: ubuntu-latest
+    needs: build
+    env:
+      CONTAINER_NAME: ${{ github.event.repository.name }}-apptest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v1
+      - name: Log in to GitHub Packages
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin docker.pkg.github.com
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull images
+        run: |
+          docker pull ${{ env.IMAGE }}:latest || true
+      - name: Remove testing container if already present
+        continue-on-error: true
+        run: docker rm -f $CONTAINER_NAME
+      - name: Run testing container
+        run: |
+          docker run \
+            -d \
+            --rm \
+            --name $CONTAINER_NAME \
+            -e PORT=8765 \
+            -e ENVIRONMENT=dev \
+            -e DATABASE_TEST_URL=sqlite://sqlite.db \
+            -p 5003:8765 \
+            ${{ env.IMAGE }}:latest
+      - name: Install requirements
+        run: |
+          docker cp ./src/requirements-test.txt $CONTAINER_NAME:/tmp/ && \
+          docker exec -u app $CONTAINER_NAME pip install -r /tmp/requirements-test.txt
+      - name: Pytest
+        run: docker exec $CONTAINER_NAME python -m pytest .
+      - name: Flake8
+        run: docker exec $CONTAINER_NAME python -m flake8 ./app
+      - name: Black
+        run: docker exec $CONTAINER_NAME python -m black ./app --check
+      - name: isort
+        run: docker exec $CONTAINER_NAME /bin/sh -c "python -m isort ./*/*.py --check-only"
+      - name: Remove testing container
+        if: always()
+        continue-on-error: true
+        run: docker rm -f $CONTAINER_NAME
+
+  deploy:
+    name: Deploy
+    runs-on: self-hosted
+    # runs-on: ubuntu-latest
+    needs: [ build, test ]
+    env:
+      CONTAINER_NAME: ${{ github.event.repository.name }}-deployed
+#    env:
+#      HEROKU_APP_NAME: lit-harbor-13299
+#      HEROKU_REGISTRY_IMAGE: registry.heroku.com/${HEROKU_APP_NAME}/web
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v1
+      - name: Log in to GitHub Packages
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin docker.pkg.github.com
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull images
+        run: docker pull ${{ env.IMAGE }}:latest || true;
+      - name: Remove production container if already present
+        continue-on-error: true
+        run: docker rm -f $CONTAINER_NAME
+      - name: Deploy locally
+        run: |
+          docker run \
+            -d \
+            --name $CONTAINER_NAME \
+            -p $PORT \
+            -e PORT=$PORT \
+            ${{ env.IMAGE }}:latest
+## Heroku example
+#      - name: Log in to the Heroku Container Registry
+#        run: docker login -u _ -p ${HEROKU_AUTH_TOKEN} registry.heroku.com
+#        env:
+#          HEROKU_AUTH_TOKEN: ${{ secrets.HEROKU_AUTH_TOKEN }}
+#      - name: Push to the registry
+#        run: docker push ${{ env.HEROKU_REGISTRY_IMAGE }}
+#      - name: Set environment variables
+#        run: |
+#          echo ::set-env name=HEROKU_REGISTRY_IMAGE::${{ env.HEROKU_REGISTRY_IMAGE }}
+#          echo ::set-env name=HEROKU_AUTH_TOKEN::${{ secrets.HEROKU_AUTH_TOKEN }}
+#      - name: Release
+#        run: |
+#          chmod +x ./release.sh
+#          ./release.sh
