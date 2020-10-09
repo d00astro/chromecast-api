@@ -1,7 +1,7 @@
 # pull official base image
 FROM python:3.8.3-slim-buster
 
-ARG app_name=api
+ARG app_name=chromecast-api
 
 # set working directory
 RUN mkdir -p /usr/src
